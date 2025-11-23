@@ -2,7 +2,9 @@ import librosa
 import numpy as np
 import pandas as pd
 import os
+import tempfile
 from pathlib import Path
+from google.cloud import storage # Import GCS library
 from audio_preprocessing import normalize_and_trim, SR
 
 # --- Configuration Constants ---
@@ -10,27 +12,34 @@ N_MFCC = 40
 N_FFT = 2048
 HOP_LENGTH = 512
 
+# ⚠️ UPDATE THIS WITH YOUR ACTUAL BUCKET NAME
+BUCKET_NAME = "voicedata-csv"
+PROJECT_ID = "peak-apparatus-479108-f5"
+# Folder prefix inside the bucket (e.g., "ReCANVo/"). Leave empty "" if files are at root.
+BUCKET_PREFIX = "ReCANVo/"
+
 def extract_features(audio_path: str) -> np.ndarray:
     """
     Extracts purely technical features: MFCCs, Pitch, and Energy.
     """
     # 1. Preprocess the audio
+    # audio_path here will be a temporary local path to the downloaded file
     y_trimmed, sr = normalize_and_trim(audio_path, SR)
 
     if y_trimmed.size == 0:
         return None
 
-    # [cite_start]2. Extract MFCCs [cite: 14]
+    #[cite_start]# [cite: 14] 2. Extract MFCCs
     mfccs = librosa.feature.mfcc(
         y=y_trimmed, sr=sr, n_mfcc=N_MFCC, n_fft=N_FFT, hop_length=HOP_LENGTH
     )
 
-    # [cite_start]3. Extract Energy (RMS) [cite: 14]
+    #[cite_start]# [cite: 14] 3. Extract Energy (RMS)
     rms = librosa.feature.rms(
         y=y_trimmed, frame_length=N_FFT, hop_length=HOP_LENGTH
     )
 
-    # [cite_start]4. Extract Pitch (F0 using pYIN) [cite: 14]
+    #[cite_start]# [cite: 14] 4. Extract Pitch (F0 using pYIN)
     f0, voiced_flag, voiced_probs = librosa.pyin(
         y=y_trimmed,
         fmin=librosa.note_to_hz('C2'),
@@ -59,86 +68,111 @@ def extract_features(audio_path: str) -> np.ndarray:
 
     return np.array(aggregated_features)
 
-def process_files(file_list: list) -> list:
+def process_gcs_blobs(blob_list: list) -> list:
     """
-    Helper: Processes a list of files and returns a list of row dictionaries.
-    Removes redundancy between create and update functions.
+    Helper: Downloads GCS blobs to temp files, extracts features, and returns rows.
+    FIXED for Windows: Closes the file handle before Librosa tries to read it.
     """
     processed_rows = []
-    print(f"Processing {len(file_list)} files...")
+    print(f"Processing {len(blob_list)} files from Cloud Storage...")
 
-    for audio_path in file_list:
-        if not audio_path.exists():
+    for blob in blob_list:
+        # We process only .wav files
+        if not blob.name.lower().endswith('.wav'):
             continue
 
-        feature_vector = extract_features(str(audio_path))
+        temp_filename = None
+        try:
+            # 1. Create a temp file but DON'T keep it open
+            # delete=False is crucial for Windows so we can close it and then re-open it with librosa
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_audio:
+                temp_filename = temp_audio.name
+                print(f"Downloading {blob.name}...")
+                blob.download_to_filename(temp_filename)
 
-        if feature_vector is not None:
-            row = {'filepath': str(audio_path.name)}
-            for i, val in enumerate(feature_vector):
-                row[f'feature_{i}'] = val
-            processed_rows.append(row)
+            # 2. File is now closed, so Librosa can safely open it
+            feature_vector = extract_features(temp_filename)
+
+            if feature_vector is not None:
+                row = {'filepath': blob.name}
+                for i, val in enumerate(feature_vector):
+                    row[f'feature_{i}'] = val
+                processed_rows.append(row)
+
+        except Exception as e:
+            print(f"Error processing {blob.name}: {e}")
+
+        finally:
+            # 3. Manually clean up the file
+            if temp_filename and os.path.exists(temp_filename):
+                try:
+                    os.remove(temp_filename)
+                except PermissionError:
+                    pass # Sometimes Windows holds on a bit too long; ignore simple cleanup errors
 
     return processed_rows
 
-def create_feature_csv(file_list: list, output_filename: str = 'features.csv'):
-    """Generates the features.csv from scratch."""
-    data = process_files(file_list)
-
-    if data:
-        df = pd.DataFrame(data)
-        df.to_csv(output_filename, index=False)
-        print(f"✅ Created {output_filename} with {len(df)} rows.")
-    else:
-        print("❌ No features extracted.")
-
-def update_feature_csv(folder_path: Path, csv_path: str = 'features.csv'):
+def update_feature_csv_from_cloud(bucket_name: str, prefix: str, csv_path: str = 'features.csv'):
     """
-    Smart updater: Only processes files not already in the CSV.
+    Smart updater: Connects to GCS, checks against local CSV, downloads & processes ONLY new files.
     """
     csv_file = Path(csv_path)
 
-    # 1. If CSV doesn't exist, create it from scratch
-    if not csv_file.exists():
-        print(f"CSV not found. Creating new one...")
-        all_files = list(folder_path.glob("**/*.wav"))
-        create_feature_csv(all_files, csv_path)
-        return
-
-    # 2. Load existing files to avoid re-processing
+    # 1. Initialize Google Cloud Storage Client
     try:
-        df = pd.read_csv(csv_path)
-        existing_files = set(df['filepath'].astype(str))
+        storage_client = storage.Client(project=PROJECT_ID)
+        bucket = storage_client.bucket(bucket_name)
+        print(f"Connected to GCS Bucket: {bucket_name}")
     except Exception as e:
-        print(f"Error reading CSV: {e}")
+        print(f"❌ Failed to connect to GCS. Run 'gcloud auth application-default login'. Error: {e}")
         return
 
-    # 3. Find NEW files only
-    all_audio_files = list(folder_path.glob("**/*.wav"))
-    new_files = [f for f in all_audio_files if f.name not in existing_files]
+    # 2. Load existing CSV to find already processed files
+    existing_files = set()
+    if csv_file.exists():
+        try:
+            df = pd.read_csv(csv_path)
+            # Ensure we compare strings to strings
+            existing_files = set(df['filepath'].astype(str))
+            print(f"Loaded {len(existing_files)} existing entries from {csv_path}")
+        except Exception as e:
+            print(f"Error reading CSV: {e}")
+            return
+    else:
+        print(f"CSV not found. A new one will be created.")
 
-    if not new_files:
-        print("No new files found. CSV is up to date.")
+    # 3. List Blobs in the Bucket
+    print(f"Scanning bucket '{bucket_name}' for files...")
+    # list_blobs returns an iterator
+    blobs = list(bucket.list_blobs(prefix=prefix))
+
+    # 4. Filter for NEW files only
+    # We check if the blob name (e.g., 'ReCANVo/audio.wav') is in our existing set
+    new_blobs = [b for b in blobs if b.name not in existing_files and b.name.endswith('.wav')]
+
+    if not new_blobs:
+        print("✅ No new files found in Cloud. CSV is up to date.")
         return
 
-    # 4. Process only the new files
-    new_data = process_files(new_files)
+    # 5. Process the new blobs
+    new_data = process_gcs_blobs(new_blobs)
 
-    # 5. Append to existing CSV
+    # 6. Save/Append to CSV
     if new_data:
         new_df = pd.DataFrame(new_data)
-        new_df.to_csv(csv_path, mode='a', header=False, index=False)
-        print(f"✅ Added {len(new_df)} new entries to {csv_path}")
+
+        if not csv_file.exists():
+            # Create new file with header
+            new_df.to_csv(csv_path, index=False)
+            print(f"✅ Created {csv_path} with {len(new_df)} rows.")
+        else:
+            # Append without header
+            new_df.to_csv(csv_path, mode='a', header=False, index=False)
+            print(f"✅ Added {len(new_df)} new entries to {csv_path}")
+    else:
+        print("❌ No features extracted from new files.")
 
 if __name__ == '__main__':
-    # --- PATH SETUP ---
-    SCRIPT_DIR = Path(__file__).parent.resolve()
-    RECANVO_FOLDER = SCRIPT_DIR / "ReCANVo"
-    CSV_FILE = "features.csv"
-
     # --- EXECUTION ---
-    # We only call ONE function now. It handles both creation and updating.
-    if RECANVO_FOLDER.exists():
-        update_feature_csv(RECANVO_FOLDER, CSV_FILE)
-    else:
-        print(f"ReCANVo folder not found at {RECANVO_FOLDER}")
+    # Ensure you have run 'gcloud auth application-default login' in your terminal first!
+    update_feature_csv_from_cloud(BUCKET_NAME, BUCKET_PREFIX)
