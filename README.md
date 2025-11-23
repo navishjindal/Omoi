@@ -2,7 +2,7 @@
 
 **Voice for everyone.**
 
-Amplify is a next-generation **Augmentative and Alternative Communication (AAC)** platform designed to empower non-verbal autistic individuals. By combining traditional symbol-based communication with **multimodal AI**, Amplify bridges the gap between intent, raw vocalization, and clear, natural speech.
+Omoi is a next-generation **Augmentative and Alternative Communication (AAC)** platform designed to empower non-verbal autistic individuals. By combining traditional symbol-based communication with **multimodal AI**, Amplify bridges the gap between intent, raw vocalization, and clear, natural speech.
 
 ---
 
@@ -21,7 +21,7 @@ If a user selects the **[Play]** icon while making an excited vocalization, Ampl
 
 ## 🌍 UN Sustainable Development Goals (SDGs)
 
-Amplify is built with a global vision to reduce barriers and foster inclusivity, directly aligning with the **United Nations 17 Sustainable Development Goals**:
+Omoi is built with a global vision to reduce barriers and foster inclusivity, directly aligning with the **United Nations 17 Sustainable Development Goals**:
 
 ### 🎯 Goal 10: Reduced Inequalities
 By providing a tool that allows neurodivergent individuals to communicate as fast and seamlessly as neurotypical individuals, we are dismantling the social and technological barriers that lead to exclusion.
@@ -30,13 +30,13 @@ By providing a tool that allows neurodivergent individuals to communicate as fas
 Communication is fundamental to mental health. Reducing the frustration of being misunderstood drastically lowers anxiety and behavioral outbursts, promoting better emotional well-being for users and caregivers.
 
 ### 🎯 Goal 4: Quality Education
-Inclusive education requires inclusive tools. Amplify allows non-verbal students to participate in classrooms, ask questions, and socialize with peers effectively.
+Inclusive education requires inclusive tools. Omoi allows non-verbal students to participate in classrooms, ask questions, and socialize with peers effectively.
 
 ---
 
 ## 🧠 How It Works: The "Magic" Logic
 
-Amplify uses a sophisticated pipeline to transform simple inputs into complex, human conversations:
+Omoi uses a sophisticated pipeline to transform simple inputs into complex, human conversations:
 
 1.  **Background Audio Recording (The "Ear"):**
     *   From the moment the app starts, it listens. It captures the user's environment and their specific vocalizations using a high-fidelity WAV encoder.
@@ -64,43 +64,65 @@ Amplify uses a sophisticated pipeline to transform simple inputs into complex, h
 *   **Swipe Navigation:** Modern, gesture-based UI designed for motor accessibility.
 *   **Visual Feedback:** Real-time audio wave visualization lets the user know they are being heard.
 *   **Aesthetic UI:** Designed with soft pastels and rounded corners to be sensory-friendly and visually appealing.
+*   **Eye Tracking:** Built-in gaze tracking for hands-free navigation.
 
 ---
 
 ## 💻 Tech Stack
 
-*   **Frontend:** React 19, TypeScript, Tailwind CSS
+*   **Frontend:** React 19, TypeScript, Tailwind CSS (via CDN)
 *   **AI Core:** Google Gemini 2.5 Flash (Multimodal capabilities)
 *   **Voice Generation:** Gemini 2.5 Flash TTS
 *   **Audio Processing:** Web Audio API (ScriptProcessorNode for WAV encoding)
+*   **Data Processing:** Python (Pandas, Scikit-learn) for emotion model training
 *   **Icons:** Lucide React & Standard Emojis (for universal recognition)
 
 ---
 
 ## 📦 Installation & Setup
 
-1.  **Clone the repository**
-    ```bash
-    git clone https://github.com/ammarjmahmood/Amplify.git
-    cd Amplify
-    ```
+### Prerequisites
+*   Node.js (v18 or higher)
+*   Python 3.8+ (for model training scripts)
+*   Google Gemini API Key
 
-2.  **Install dependencies**
-    ```bash
-    npm install
-    ```
+### 1. Clone the repository
+```bash
+git clone https://github.com/ammarjmahmood/Amplify.git
+cd Amplify
+```
 
-3.  **Configure API Key**
-    *   Create a `.env` file in the root directory.
-    *   Add your Google Gemini API key:
-    ```env
-    API_KEY=your_google_api_key_here
-    ```
+### 2. Frontend Setup
+Install the dependencies and start the development server:
 
-4.  **Run the development server**
-    ```bash
-    npm start
-    ```
+```bash
+npm install
+npm run dev
+```
+
+### 3. Python Environment (Optional - For Model Training)
+If you wish to work with the emotion recognition models (`Module2.py`, etc.):
+
+```bash
+# Create a virtual environment
+python -m venv venv
+
+# Activate the virtual environment
+# Windows:
+venv\Scripts\activate
+# Mac/Linux:
+source venv/bin/activate
+
+# Install dependencies
+pip install pandas numpy scikit-learn joblib
+```
+
+### 4. Configure API Key
+*   Create a `.env` file in the root directory.
+*   Add your Google Gemini API key:
+```env
+API_KEY=your_google_api_key_here
+```
 
 ---
 
@@ -108,4 +130,4 @@ Amplify uses a sophisticated pipeline to transform simple inputs into complex, h
 
 We aim to integrate **personalized voice cloning**, allowing users to upload a sample of their own vocalizations (or a family member's voice) to create a unique synthetic voice that feels like *theirs*, further solidifying their identity and independence.
 
-> *Amplify: Because everyone deserves to be heard.*
+> *Omoi: Because everyone deserves to be heard.*
