@@ -8,21 +8,28 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
     const [hoveredElement, setHoveredElement] = useState<string | null>(null);
     const [dwellProgress, setDwellProgress] = useState<number>(0);
     const [isInitialized, setIsInitialized] = useState(false);
+    const [isUsingMouse, setIsUsingMouse] = useState(false);
 
     const dwellTimerRef = useRef<NodeJS.Timeout | null>(null);
     const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const dwellStartTimeRef = useRef<number>(0);
-    const currentHoveredRef = useRef<string | null>(null); // Use ref to avoid closure issues
+    const currentHoveredRef = useRef<string | null>(null);
+    const mouseInactivityTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const isUsingMouseRef = useRef<boolean>(false);
+    const latestGazePositionRef = useRef<{ x: number, y: number } | null>(null);
+
+    // Keep track of latest gaze position in a ref for the gaze listener
+    useEffect(() => {
+        latestGazePositionRef.current = gazePosition;
+    }, [gazePosition]);
 
     useEffect(() => {
         if (!enabled) {
             if ((window as any).webgazer && webgazerInitialized) {
-                // Fully stop webgazer to release camera
                 (window as any).webgazer.end();
                 console.log('🛑 Eye tracking stopped');
                 webgazerInitialized = false;
 
-                // Force remove video container if it persists
                 const videoContainer = document.getElementById('webgazerVideoContainer');
                 if (videoContainer) {
                     videoContainer.remove();
@@ -33,27 +40,56 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
             setDwellProgress(0);
             currentHoveredRef.current = null;
             setIsInitialized(false);
+            setIsUsingMouse(false);
+            isUsingMouseRef.current = false;
             if (dwellTimerRef.current) {
                 clearTimeout(dwellTimerRef.current);
             }
             if (progressIntervalRef.current) {
                 clearInterval(progressIntervalRef.current);
             }
+            if (mouseInactivityTimerRef.current) {
+                clearTimeout(mouseInactivityTimerRef.current);
+            }
+
+            document.body.style.cursor = 'default';
             return;
         }
 
-        // Since we are using .end(), we don't need resume logic as much, 
-        // but if we kept it initialized we would use it. 
-        // With .end(), we re-initialize.
+        // Hide cursor when eye tracking is enabled
+        document.body.style.cursor = 'none';
+
+        // Mouse movement handler
+        const handleMouseMove = (e: MouseEvent) => {
+            setIsUsingMouse(true);
+            isUsingMouseRef.current = true;
+            setGazePosition({ x: e.clientX, y: e.clientY });
+
+            if (mouseInactivityTimerRef.current) {
+                clearTimeout(mouseInactivityTimerRef.current);
+            }
+
+            mouseInactivityTimerRef.current = setTimeout(() => {
+                console.log('⏰ Mouse inactive for 5s, switching back to eye tracking');
+                setIsUsingMouse(false);
+                isUsingMouseRef.current = false;
+            }, 5000);
+        };
+
+        document.addEventListener('mousemove', handleMouseMove);
+
         if (webgazerInitialized && (window as any).webgazer) {
-            // If somehow still initialized but we want to ensure it's running
             (window as any).webgazer.resume();
             setIsInitialized(true);
-            return;
+            return () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+            };
         }
 
         if (webgazerInitialized) {
-            return;
+            return () => {
+                document.removeEventListener('mousemove', handleMouseMove);
+            };
         }
 
         console.log('🆕 Initializing WebGazer for the first time');
@@ -71,19 +107,32 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                 if (data == null) return;
 
                 const { x, y } = data;
-                setGazePosition({ x, y });
 
-                const elements = document.elementsFromPoint(x, y);
+                // Only update gaze position from eye tracking if NOT using mouse
+                if (!isUsingMouseRef.current) {
+                    setGazePosition({ x, y });
+                }
+
+                // ALWAYS process elements for dwell timer (works in both modes)
+                // Get current position from either mouse or eye tracking
+                let currentX = x;
+                let currentY = y;
+
+                if (isUsingMouseRef.current && latestGazePositionRef.current) {
+                    currentX = latestGazePositionRef.current.x;
+                    currentY = latestGazePositionRef.current.y;
+                }
+
+                const elements = document.elementsFromPoint(currentX, currentY);
 
                 // --- TOLERANCE CHECK ---
-                // If nothing found at exact point, check surrounding area (50px radius)
                 if (!elements.some(el => el.hasAttribute('data-symbol-id'))) {
-                    const tolerance = 50; // pixels
+                    const tolerance = 50;
                     const pointsToCheck = [
-                        { x: x, y: y - tolerance }, // Top
-                        { x: x, y: y + tolerance }, // Bottom
-                        { x: x - tolerance, y: y }, // Left
-                        { x: x + tolerance, y: y }  // Right
+                        { x: currentX, y: currentY - tolerance },
+                        { x: currentX, y: currentY + tolerance },
+                        { x: currentX - tolerance, y: currentY },
+                        { x: currentX + tolerance, y: currentY }
                     ];
 
                     for (const point of pointsToCheck) {
@@ -91,14 +140,13 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                         const nearbyButton = nearbyElements.find(el => el.hasAttribute('data-symbol-id'));
                         if (nearbyButton) {
                             elements.push(nearbyButton);
-                            break; // Found one, stop looking
+                            break;
                         }
                     }
                 }
 
                 let buttonElement: Element | null = null;
 
-                // Find button with data-symbol-id
                 for (const el of elements) {
                     if (el.hasAttribute && el.hasAttribute('data-symbol-id')) {
                         buttonElement = el;
@@ -106,7 +154,6 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                     }
                 }
 
-                // Try closest if not found
                 if (!buttonElement) {
                     for (const el of elements) {
                         if (el instanceof HTMLElement) {
@@ -123,14 +170,13 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                     const elementId = buttonElement.getAttribute('data-symbol-id');
 
                     if (elementId && elementId !== currentHoveredRef.current) {
-                        // NEW element - start dwell timer
-                        console.log('🎯 NEW DWELL START:', elementId);
+                        const mode = isUsingMouseRef.current ? 'Mouse' : 'Eye';
+                        console.log(`🎯 NEW DWELL START (${mode} Mode):`, elementId);
                         currentHoveredRef.current = elementId;
                         setHoveredElement(elementId);
                         dwellStartTimeRef.current = Date.now();
                         setDwellProgress(0);
 
-                        // Clear existing timers
                         if (dwellTimerRef.current) {
                             clearTimeout(dwellTimerRef.current);
                             dwellTimerRef.current = null;
@@ -140,24 +186,20 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                             progressIntervalRef.current = null;
                         }
 
-                        // Update progress every 50ms
                         progressIntervalRef.current = setInterval(() => {
                             const elapsed = Date.now() - dwellStartTimeRef.current;
                             const progress = Math.min((elapsed / dwellTime) * 100, 100);
                             setDwellProgress(progress);
                         }, 50);
 
-                        // Trigger click after dwell time
                         dwellTimerRef.current = setTimeout(() => {
                             console.log('🚀 DWELL COMPLETE! CLICKING:', elementId);
-                            console.log('Button element:', buttonElement);
 
                             try {
                                 (buttonElement as HTMLElement).click();
                                 console.log('✅ CLICK SUCCESSFUL!');
                             } catch (err) {
                                 console.error('❌ Click error:', err);
-                                // Try manual event
                                 const evt = new MouseEvent('click', { bubbles: true, cancelable: true });
                                 buttonElement.dispatchEvent(evt);
                             }
@@ -173,7 +215,6 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
                         }, dwellTime);
                     }
                 } else {
-                    // Not looking at any button
                     if (currentHoveredRef.current !== null) {
                         console.log('👋 Stopped looking at button');
                         currentHoveredRef.current = null;
@@ -264,8 +305,13 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
             if (dwellTimerRef.current) {
                 clearTimeout(dwellTimerRef.current);
             }
+            if (mouseInactivityTimerRef.current) {
+                clearTimeout(mouseInactivityTimerRef.current);
+            }
+            document.removeEventListener('mousemove', handleMouseMove);
+            document.body.style.cursor = 'default';
         };
     }, [enabled, dwellTime]);
 
-    return { gazePosition, hoveredElement, dwellProgress, isInitialized };
+    return { gazePosition, hoveredElement, dwellProgress, isInitialized, isUsingMouse };
 };

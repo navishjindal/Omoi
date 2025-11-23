@@ -5,7 +5,7 @@ import { AACSymbol, NodeType } from './types';
 import { naturalizeSentence, generateSpeech, playAudioBuffer, predictNextSymbols } from './services/geminiService';
 import { useEyeTracking } from './hooks/useEyeTracking';
 import { GazeCursor } from './components/GazeCursor';
-import { CalibrationScreen } from './components/CalibrationScreen';
+
 import { ThemeProvider } from './components/ThemeContext';
 import { ThemeToggle } from './components/ThemeToggle';
 import { LocationTracker } from './components/LocationTracker';
@@ -221,9 +221,7 @@ function AppContent() {
 
   // Eye Tracking State
   const [eyeTrackingEnabled, setEyeTrackingEnabled] = useState(false);
-  const [showCalibration, setShowCalibration] = useState(false);
-  const [isCalibrated, setIsCalibrated] = useState(false);
-  const { gazePosition, hoveredElement, dwellProgress, isInitialized } = useEyeTracking(eyeTrackingEnabled, 500);
+  const { gazePosition, hoveredElement, dwellProgress, isInitialized, isUsingMouse } = useEyeTracking(eyeTrackingEnabled, 1000);
 
   // Animation State
   const [isStarting, setIsStarting] = useState(false);
@@ -517,21 +515,7 @@ function AppContent() {
   if (view === 'landing') {
     return (
       <>
-        {/* Calibration Screen Overlay */}
-        {showCalibration && (
-          <CalibrationScreen
-            onComplete={() => {
-              setShowCalibration(false);
-              setIsCalibrated(true);
-              console.log('✅ Calibration complete!');
-            }}
-            onSkip={() => {
-              setShowCalibration(false);
-              setIsCalibrated(true);
-              console.log('⏭️ Calibration skipped');
-            }}
-          />
-        )}
+
 
         <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden bg-[#f0f4f8] dark:bg-slate-900 transition-colors duration-500">
           <div className="absolute top-0 left-0 w-96 h-96 bg-purple-300 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob dark:opacity-20"></div>
@@ -611,18 +595,7 @@ function AppContent() {
               <LocationTracker />
               <ThemeToggle />
               <button
-                onClick={() => {
-                  if (!eyeTrackingEnabled) {
-                    // Turning ON - show calibration if not calibrated
-                    setEyeTrackingEnabled(true);
-                    if (!isCalibrated) {
-                      setShowCalibration(true);
-                    }
-                  } else {
-                    // Turning OFF
-                    setEyeTrackingEnabled(false);
-                  }
-                }}
+                onClick={() => setEyeTrackingEnabled(!eyeTrackingEnabled)}
                 className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-all font-bold ${eyeTrackingEnabled
                   ? 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400'
                   : 'bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700'
@@ -808,6 +781,16 @@ function AppContent() {
            `}</style>
         </div>
       ))}
+
+      {/* Mode Indicator */}
+      {eyeTrackingEnabled && (
+        <div className="fixed bottom-4 left-4 z-40 bg-slate-900/80 text-white px-4 py-2 rounded-xl backdrop-blur-sm border border-slate-700 flex items-center gap-2">
+          <div className={`w-2 h-2 rounded-full ${isUsingMouse ? 'bg-blue-400' : 'bg-green-400'} animate-pulse`}></div>
+          <span className="text-sm font-bold">
+            {isUsingMouse ? '🖱️ Mouse Mode' : '👁️ Eye Tracking'}
+          </span>
+        </div>
+      )}
 
       {/* Gaze Cursor Overlay */}
       <GazeCursor gazePosition={gazePosition} enabled={eyeTrackingEnabled} />
