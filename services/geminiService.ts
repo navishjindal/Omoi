@@ -46,20 +46,24 @@ export const naturalizeSentence = async (symbols: string[], audioBlob?: Blob | n
   if (symbols.length === 0 && !audioBlob) return "";
 
   const model = 'gemini-2.5-flash';
-  
+
   const promptText = `
-    Task: Interpret the user's intent based on the selected AAC symbols AND their vocalization (audio).
+    You are an AAC communication assistant. The user has selected these symbols in order: ${symbols.join(', ')}
     
-    Selected Symbols: ${symbols.join(', ')}
+    Your task:
+    1. Reorder and combine these words into a grammatically correct, natural sentence
+    2. The user may have selected words in ANY order - you must rearrange them to make sense
+    3. If audio is provided, use it to detect emotion (excited, frustrated, calm, urgent) and tone
+    4. Speak as a child would naturally speak
+    5. Add necessary words (I, want, need, please, help, etc.) to make it sound natural
     
-    Instructions:
-    1. Listen to the audio (if provided) to detect tone, emotion, or attempted words (like "I want", "No", "Please").
-    2. If the audio is unclear or silence, rely on the symbols.
-    3. Combine the symbols into a natural, polite English sentence spoken by a child.
-    4. Example: If Audio is "uhh waaa" (sounds like want) and Symbol is "Pizza", output "I really want some pizza."
-    5. Example: If Symbol is "Bathroom", output "I need to go to the bathroom."
+    Examples:
+    - Input: "help, poop, dad" → Output: "Dad, I need help going to the bathroom!"
+    - Input: "pizza, want, now" → Output: "I want pizza right now!"
+    - Input: "play, outside, want" → Output: "I want to play outside!"
+    - Input: "bathroom, need" → Output: "I need to use the bathroom."
     
-    Return ONLY the sentence string.
+    Return ONLY the natural sentence, nothing else.
   `;
 
   const parts: any[] = [{ text: promptText }];
@@ -102,20 +106,12 @@ export const predictNextSymbols = async (currentLabels: string[]): Promise<strin
 
   const model = 'gemini-2.5-flash';
   const prompt = `
-    You are an AAC (Augmentative and Alternative Communication) predictive engine.
+    AAC Prediction Task:
+    Current: [${currentLabels.join(', ')}]
+    Vocabulary: ${vocabContext}
     
-    Current Sentence Context: [${currentLabels.join(', ')}]
-    
-    Available Vocabulary Options (ID: Label):
-    ${vocabContext}
-    
-    Task:
-    Predict the ID of the next 3 most likely symbols the user will want to select to complete their thought.
-    
-    Rules:
-    1. Return ONLY a JSON array of strings (the IDs).
-    2. Do not include any markdown or explanation.
-    3. Example output: ["want", "apple", "play"]
+    Return JSON array of 3 most likely next symbol IDs.
+    Example: ["want", "apple", "play"]
   `;
 
   try {
@@ -124,10 +120,10 @@ export const predictNextSymbols = async (currentLabels: string[]): Promise<strin
       contents: prompt,
       config: { responseMimeType: 'application/json' }
     });
-    
+
     const text = response.text;
     if (!text) return [];
-    
+
     const parsed = JSON.parse(text);
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
@@ -137,11 +133,51 @@ export const predictNextSymbols = async (currentLabels: string[]): Promise<strin
 };
 
 /**
- * Generates high-quality speech from text using Gemini 2.5 Flash TTS.
+ * Generates high-quality speech from text using ElevenLabs TTS.
+ * Falls back to Gemini TTS if ElevenLabs fails.
  */
 export const generateSpeech = async (text: string): Promise<ArrayBuffer | null> => {
   if (!text) return null;
 
+  // Try ElevenLabs first (faster and higher quality)
+  try {
+    const ELEVENLABS_API_KEY = process.env.ELEVENLABS_API_KEY;
+
+    if (ELEVENLABS_API_KEY) {
+      // Using Rachel voice - warm, clear, and child-friendly
+      const voiceId = 'EXAVITQu4vr4xnSDxMaL'; // Rachel voice
+
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': ELEVENLABS_API_KEY
+        },
+        body: JSON.stringify({
+          text: text,
+          model_id: 'eleven_turbo_v2_5', // Fastest model with great quality
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75,
+            style: 0.5,
+            use_speaker_boost: true
+          }
+        })
+      });
+
+      if (response.ok) {
+        const audioBlob = await response.blob();
+        return await audioBlob.arrayBuffer();
+      } else {
+        console.warn("ElevenLabs TTS failed, falling back to Gemini:", await response.text());
+      }
+    }
+  } catch (error) {
+    console.warn("ElevenLabs TTS error, falling back to Gemini:", error);
+  }
+
+  // Fallback to Gemini TTS
   try {
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash-preview-tts",
@@ -150,7 +186,7 @@ export const generateSpeech = async (text: string): Promise<ArrayBuffer | null> 
         responseModalities: [Modality.AUDIO],
         speechConfig: {
           voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Kore' }, 
+            prebuiltVoiceConfig: { voiceName: 'Kore' },
           },
         },
       },
@@ -168,7 +204,7 @@ export const generateSpeech = async (text: string): Promise<ArrayBuffer | null> 
     }
     return null;
   } catch (error) {
-    console.error("Gemini TTS error:", error);
+    console.error("Both ElevenLabs and Gemini TTS failed:", error);
     return null;
   }
 };

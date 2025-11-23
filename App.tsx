@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Mic, Volume2, Home, Wand2, X, Zap, Sparkles, StopCircle, Delete, Eraser, Check } from 'lucide-react';
+import { Mic, Volume2, Home, Wand2, X, Zap, Sparkles, StopCircle, Delete, Eraser, Check, ArrowLeft, Eye, EyeOff } from 'lucide-react';
 import { VOCABULARY } from './constants';
 import { AACSymbol, NodeType } from './types';
 import { naturalizeSentence, generateSpeech, playAudioBuffer, predictNextSymbols } from './services/geminiService';
+import { useEyeTracking } from './hooks/useEyeTracking';
+import { GazeCursor } from './components/GazeCursor';
 
 // --- WAV ENCODER HELPERS ---
 
@@ -68,18 +70,21 @@ const IconCard: React.FC<{
   symbol: AACSymbol;
   onClick: (symbol: AACSymbol) => void;
   isSuggested?: boolean;
-}> = ({ symbol, onClick, isSuggested }) => {
+  isGazedAt?: boolean;
+}> = ({ symbol, onClick, isSuggested, isGazedAt }) => {
   return (
     <button
+      data-symbol-id={symbol.id}
       onClick={() => onClick(symbol)}
       className={`
         relative flex flex-col items-center justify-center 
         aspect-square w-full p-2 rounded-3xl 
         transition-all duration-200 select-none
-        ${isSuggested 
-          ? 'scale-105 shadow-[0_10px_20px_-5px_rgba(0,0,0,0.2)] ring-4 ring-indigo-200 z-10' 
+        ${isSuggested
+          ? 'scale-105 shadow-[0_10px_20px_-5px_rgba(0,0,0,0.2)] ring-4 ring-indigo-200 z-10'
           : 'hover:scale-105 shadow-[0_4px_0_0_rgba(0,0,0,0.1)] hover:shadow-lg'
         }
+        ${isGazedAt ? 'ring-4 ring-green-400 scale-110' : ''}
         border-b-4 active:border-b-0 active:translate-y-1
         ${symbol.color}
       `}
@@ -120,23 +125,23 @@ const AudioVisualizer: React.FC<{ analyser: AnalyserNode | null, isRecording: bo
 
       const barCount = 20;
       const barWidth = (canvas.width / barCount) - 2;
-      const step = Math.floor(bufferLength / barCount / 2); 
+      const step = Math.floor(bufferLength / barCount / 2);
 
       for (let i = 0; i < barCount; i++) {
-         let sum = 0;
-         for(let j=0; j<step; j++) {
-            sum += dataArray[(i * step) + j];
-         }
-         const average = sum / step;
-         const percent = average / 255;
-         const height = Math.max(percent * canvas.height, 4);
-         const x = i * (barWidth + 2);
-         const y = (canvas.height - height) / 2;
+        let sum = 0;
+        for (let j = 0; j < step; j++) {
+          sum += dataArray[(i * step) + j];
+        }
+        const average = sum / step;
+        const percent = average / 255;
+        const height = Math.max(percent * canvas.height, 4);
+        const x = i * (barWidth + 2);
+        const y = (canvas.height - height) / 2;
 
-         ctx.fillStyle = `rgba(99, 102, 241, ${Math.max(0.4, percent)})`;
-         ctx.beginPath();
-         ctx.roundRect(x, y, barWidth, height, 4);
-         ctx.fill();
+        ctx.fillStyle = `rgba(99, 102, 241, ${Math.max(0.4, percent)})`;
+        ctx.beginPath();
+        ctx.roundRect(x, y, barWidth, height, 4);
+        ctx.fill();
       }
     };
 
@@ -148,8 +153,8 @@ const AudioVisualizer: React.FC<{ analyser: AnalyserNode | null, isRecording: bo
 
   return (
     <div className="flex items-center gap-2 px-3 py-1 bg-indigo-50 rounded-full border border-indigo-100 animate-fade-in">
-       <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
-       <canvas ref={canvasRef} width={120} height={24} />
+      <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+      <canvas ref={canvasRef} width={120} height={24} />
     </div>
   );
 };
@@ -160,13 +165,13 @@ export default function App() {
   const [view, setView] = useState<'landing' | 'board'>('landing');
   const [currentCategory, setCurrentCategory] = useState<AACSymbol | null>(null);
   const [sentence, setSentence] = useState<AACSymbol[]>([]);
-  
+
   const [isProcessing, setIsProcessing] = useState(false);
   const [generatedSentence, setGeneratedSentence] = useState<string>('');
-  
+
   const [isRecording, setIsRecording] = useState(false);
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  
+
   // Audio Recording Refs (WAV)
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -179,16 +184,21 @@ export default function App() {
   const [manualSuggestions, setManualSuggestions] = useState<AACSymbol[]>([]);
   const [aiSuggestions, setAiSuggestions] = useState<AACSymbol[]>([]);
 
-  // Swipe Refs
-  const touchStartRef = useRef<number>(0);
+  // Swipe/Drag Refs (for both touch and mouse)
+  const startXRef = useRef<number>(0);
+  const isDraggingRef = useRef<boolean>(false);
+
+  // Eye Tracking State
+  const [eyeTrackingEnabled, setEyeTrackingEnabled] = useState(false);
+  const { gazePosition, hoveredElement, isInitialized } = useEyeTracking(eyeTrackingEnabled, 2000);
 
   // --- RECORDING LOGIC (WAV) ---
-  
+
   const startBackgroundRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      
+
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       audioContextRef.current = audioCtx;
 
@@ -199,12 +209,12 @@ export default function App() {
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 256;
       analyser.smoothingTimeConstant = 0.7;
-      
+
       // Script Processor for Raw Data (WAV)
       // bufferSize 4096 is a good balance for UI responsiveness vs callback frequency
       const processor = audioCtx.createScriptProcessor(4096, 1, 1);
       processorRef.current = processor;
-      
+
       audioChunksRef.current = []; // Reset chunks
       isRecordingRef.current = true;
 
@@ -224,7 +234,7 @@ export default function App() {
       analyser.connect(processor);
       processor.connect(gainNode);
       gainNode.connect(audioCtx.destination);
-      
+
       analyserRef.current = analyser;
 
       setIsRecording(true);
@@ -241,7 +251,7 @@ export default function App() {
         resolve(audioBlob);
         return;
       }
-      
+
       isRecordingRef.current = false;
       setIsRecording(false);
 
@@ -250,18 +260,18 @@ export default function App() {
       if (processorRef.current) processorRef.current.disconnect();
       if (analyserRef.current) analyserRef.current.disconnect();
       if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-      
+
       // Process WAV
       if (audioContextRef.current && audioChunksRef.current.length > 0) {
         const flattened = flattenAudioChunks(audioChunksRef.current);
         const wavBlob = encodeWAV(flattened, audioContextRef.current.sampleRate);
-        
+
         setAudioBlob(wavBlob);
-        
+
         if (audioContextRef.current.state !== 'closed') {
           audioContextRef.current.close();
         }
-        
+
         resolve(wavBlob);
       } else {
         resolve(null);
@@ -279,7 +289,7 @@ export default function App() {
     const timer = setTimeout(async () => {
       const labels = sentence.map(s => s.label);
       const predictedIds = await predictNextSymbols(labels);
-      
+
       const newAiSuggestions: AACSymbol[] = [];
       predictedIds.forEach(id => {
         const found = findSymbolById(id, VOCABULARY);
@@ -318,21 +328,59 @@ export default function App() {
     setManualSuggestions([]);
   };
 
-  // --- SWIPE HANDLERS ---
+  // --- SWIPE/DRAG HANDLERS (Touch + Mouse) ---
+
+  // Touch handlers
   const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartRef.current = e.touches[0].clientX;
+    if (!currentCategory) return;
+    startXRef.current = e.touches[0].clientX;
   };
 
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (!currentCategory) return; 
-    
-    const touchEnd = e.changedTouches[0].clientX;
-    const diff = touchEnd - touchStartRef.current;
+    if (!currentCategory) return;
 
-    // Swipe Right to go Back (Lowered threshold for easier activation)
-    if (diff > 50) {
+    const touchEnd = e.changedTouches[0].clientX;
+    const diff = touchEnd - startXRef.current;
+
+    // Swipe Right to go Back (threshold: 80px)
+    if (diff > 80) {
       goBack();
     }
+  };
+
+  // Mouse handlers (for trackpad/mouse on Mac)
+  const handleMouseDown = (e: React.MouseEvent) => {
+    if (!currentCategory) return;
+    startXRef.current = e.clientX;
+    isDraggingRef.current = true;
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!currentCategory || !isDraggingRef.current) return;
+
+    const currentX = e.clientX;
+    const diff = currentX - startXRef.current;
+
+    // Visual feedback: could add a slide indicator here if needed
+    // For now, just track the movement
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+    if (!currentCategory || !isDraggingRef.current) return;
+
+    const endX = e.clientX;
+    const diff = endX - startXRef.current;
+
+    isDraggingRef.current = false;
+
+    // Swipe Right to go Back (threshold: 80px)
+    if (diff > 80) {
+      goBack();
+    }
+  };
+
+  const handleMouseLeave = () => {
+    isDraggingRef.current = false;
   };
 
   const removeFromSentence = (index: number) => {
@@ -428,27 +476,53 @@ export default function App() {
   const itemsDisplay = currentCategory ? (currentCategory.children || []) : VOCABULARY;
 
   return (
-    <div 
+    <div
       className="min-h-screen w-full bg-slate-50 flex flex-col font-nunito touch-pan-y select-none"
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      style={{ overscrollBehaviorX: 'none' }} // Prevent browser back gesture interference
+      onMouseDown={handleMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
+      style={{ overscrollBehaviorX: 'none', cursor: currentCategory && isDraggingRef.current ? 'grabbing' : 'default' }}
     >
       {/* TOP BAR */}
       <div className="bg-white shadow-lg sticky top-0 z-30 p-4 rounded-b-3xl">
         <div className="max-w-5xl mx-auto flex flex-col gap-4">
-          
+
           <div className="flex items-center justify-between">
-             <button onClick={() => setView('landing')} className="text-slate-400 hover:text-slate-600 transition-colors">
-               <Home size={24} />
-             </button>
-             <div className="flex items-center gap-3">
-                {isRecording && (
-                  <AudioVisualizer analyser={analyserRef.current} isRecording={isRecording} />
-                )}
-                <h1 className="font-black text-xl text-slate-700 tracking-tight hidden sm:block">Amplify</h1>
-             </div>
-             <div className="w-6"></div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setView('landing')} className="text-slate-400 hover:text-slate-600 transition-colors" title="Home">
+                <Home size={24} />
+              </button>
+              {currentCategory && (
+                <button
+                  onClick={goBack}
+                  className="flex items-center gap-2 px-3 py-2 bg-indigo-100 hover:bg-indigo-200 text-indigo-700 rounded-xl transition-colors font-bold"
+                  title="Go Back"
+                >
+                  <ArrowLeft size={20} />
+                  <span className="hidden sm:inline">Back</span>
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-3">
+              {isRecording && (
+                <AudioVisualizer analyser={analyserRef.current} isRecording={isRecording} />
+              )}
+              <h1 className="font-black text-xl text-slate-700 tracking-tight hidden sm:block">Amplify</h1>
+            </div>
+            <button
+              onClick={() => setEyeTrackingEnabled(!eyeTrackingEnabled)}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-all font-bold ${eyeTrackingEnabled
+                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              title={eyeTrackingEnabled ? 'Disable Eye Tracking' : 'Enable Eye Tracking'}
+            >
+              {eyeTrackingEnabled ? <Eye size={20} /> : <EyeOff size={20} />}
+              <span className="hidden md:inline">{eyeTrackingEnabled ? 'Eye On' : 'Eye Off'}</span>
+            </button>
           </div>
 
           {/* Sentence Strip */}
@@ -464,7 +538,7 @@ export default function App() {
                   <span className="text-3xl">{s.emoji}</span>
                   <span className="text-[10px] font-bold truncate max-w-[70px] uppercase tracking-wide text-slate-700 mt-1">{s.label}</span>
                 </div>
-                <button 
+                <button
                   onClick={() => removeFromSentence(idx)}
                   className="absolute -top-2 -right-2 bg-rose-500 text-white rounded-full p-1 shadow-md opacity-0 group-hover:opacity-100 transition-opacity scale-75 hover:scale-100"
                 >
@@ -477,14 +551,14 @@ export default function App() {
           {/* Generated Text & Controls */}
           <div className="space-y-3">
             {generatedSentence && (
-               <div className="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-center text-indigo-700 font-bold text-lg animate-fade-in">
-                  "{generatedSentence}"
-               </div>
+              <div className="p-3 bg-indigo-50 rounded-xl border border-indigo-100 text-center text-indigo-700 font-bold text-lg animate-fade-in">
+                "{generatedSentence}"
+              </div>
             )}
 
             <div className="flex gap-3">
               {/* New Sentence / Done Button */}
-              <button 
+              <button
                 onClick={clearSentence}
                 className="px-4 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-700 border border-emerald-200 transition-colors flex items-center justify-center gap-2 font-bold"
                 title="Start New Sentence"
@@ -493,7 +567,7 @@ export default function App() {
                 <span className="hidden sm:inline">Done</span>
               </button>
 
-              <button 
+              <button
                 onClick={handleBackspace}
                 disabled={sentence.length === 0}
                 className="px-5 rounded-xl bg-orange-100 hover:bg-orange-200 text-orange-600 border border-orange-200 transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
@@ -503,7 +577,7 @@ export default function App() {
               </button>
 
               {/* Speak / Action */}
-              <button 
+              <button
                 onClick={handleSpeak}
                 disabled={sentence.length === 0 || isProcessing}
                 className={`
@@ -513,15 +587,15 @@ export default function App() {
                 `}
               >
                 {isProcessing ? (
-                   <>
-                     <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                     Processing...
-                   </>
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Processing...
+                  </>
                 ) : (
-                   <>
-                     <Wand2 size={24} fill="currentColor" className="text-white/20" />
-                     Amplify Voice
-                   </>
+                  <>
+                    <Wand2 size={24} fill="currentColor" className="text-white/20" />
+                    Amplify Voice
+                  </>
                 )}
               </button>
             </div>
@@ -531,7 +605,7 @@ export default function App() {
 
       {/* MAIN GRID */}
       <div className="flex-1 p-4 pb-24 max-w-5xl mx-auto w-full">
-        
+
         {/* Category Header */}
         {currentCategory && (
           <div className="flex items-center gap-4 mb-6 animate-fade-in">
@@ -540,43 +614,48 @@ export default function App() {
               <h2 className="text-xl font-black text-slate-800">{currentCategory.label}</h2>
             </div>
             <div className="text-slate-300 text-sm font-bold uppercase tracking-widest animate-pulse hidden md:block">
-               &larr; Swipe to Back
+              &larr; Swipe to Back
             </div>
           </div>
         )}
 
         {/* Smart AI Suggestions Area */}
         {finalSuggestions.length > 0 && (
-           <div className="mb-6 animate-fade-in-up">
-              <div className="flex items-center gap-2 text-indigo-500 text-sm font-bold uppercase tracking-wider mb-3">
-                 <Sparkles size={16} className="text-indigo-500" /> 
-                 Suggested Next
-              </div>
-              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
-                {finalSuggestions.map(item => (
-                   <IconCard 
-                    key={`sugg-${item.id}`} 
-                    symbol={item} 
-                    onClick={handleSymbolClick} 
-                    isSuggested={true}
-                  />
-                ))}
-              </div>
-              <div className="h-1 w-full bg-slate-200 rounded-full mt-6 mb-2"></div>
-           </div>
+          <div className="mb-6 animate-fade-in-up">
+            <div className="flex items-center gap-2 text-indigo-500 text-sm font-bold uppercase tracking-wider mb-3">
+              <Sparkles size={16} className="text-indigo-500" />
+              Suggested Next
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-4">
+              {finalSuggestions.map(item => (
+                <IconCard
+                  key={`sugg-${item.id}`}
+                  symbol={item}
+                  onClick={handleSymbolClick}
+                  isSuggested={true}
+                  isGazedAt={hoveredElement === item.id}
+                />
+              ))}
+            </div>
+            <div className="h-1 w-full bg-slate-200 rounded-full mt-6 mb-2"></div>
+          </div>
         )}
 
         {/* Standard Grid */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
           {itemsDisplay.map((item) => (
-            <IconCard 
-              key={item.id} 
-              symbol={item} 
-              onClick={handleSymbolClick} 
+            <IconCard
+              key={item.id}
+              symbol={item}
+              onClick={handleSymbolClick}
+              isGazedAt={hoveredElement === item.id}
             />
           ))}
         </div>
       </div>
+
+      {/* Gaze Cursor Overlay */}
+      <GazeCursor gazePosition={gazePosition} enabled={eyeTrackingEnabled} />
 
       <style>{`
         @keyframes blob {
