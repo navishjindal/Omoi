@@ -1,0 +1,7 @@
+{
+  "name": "Amplify - AAC Voice",
+  "description": "A modern, AI-powered Augmentative and Alternative Communication (AAC) platform allowing users to communicate via smart symbols and high-quality voice generation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
