@@ -6,8 +6,31 @@ interface GazeCursorProps {
 }
 
 export const GazeCursor: React.FC<GazeCursorProps> = ({ gazePosition, enabled }) => {
-    if (!enabled || !gazePosition) return null;
+    console.log('🎯 GazeCursor - enabled:', enabled, 'position:', gazePosition);
 
+    if (!enabled) return null;
+
+    // Show yellow placeholder while waiting for gaze data
+    if (!gazePosition) {
+        return (
+            <div
+                className="fixed pointer-events-none z-50"
+                style={{
+                    left: '50%',
+                    top: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    width: 50,
+                    height: 50,
+                }}
+            >
+                <div className="w-full h-full rounded-full bg-yellow-400 opacity-70 animate-pulse border-4 border-yellow-600 shadow-lg flex items-center justify-center text-xs font-bold">
+                    👁️
+                </div>
+            </div>
+        );
+    }
+
+    // Show green cursor when tracking
     return (
         <div
             className="fixed pointer-events-none z-50"

@@ -1,28 +1,52 @@
 import { useEffect, useRef, useState } from 'react';
 
+// Global flag to track if WebGazer is already initialized
+let webgazerInitialized = false;
+
 export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
     const [gazePosition, setGazePosition] = useState<{ x: number, y: number } | null>(null);
     const [hoveredElement, setHoveredElement] = useState<string | null>(null);
+    const [dwellProgress, setDwellProgress] = useState<number>(0);
     const [isInitialized, setIsInitialized] = useState(false);
+
     const dwellTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const dwellStartTimeRef = useRef<number>(0);
+    const currentHoveredRef = useRef<string | null>(null); // Use ref to avoid closure issues
 
     useEffect(() => {
         if (!enabled) {
-            // Cleanup when disabled
-            if ((window as any).webgazer) {
-                (window as any).webgazer.end();
+            if ((window as any).webgazer && webgazerInitialized) {
+                (window as any).webgazer.pause();
+                console.log('⏸️ Eye tracking paused');
             }
             setGazePosition(null);
             setHoveredElement(null);
+            setDwellProgress(0);
+            currentHoveredRef.current = null;
             setIsInitialized(false);
             if (dwellTimerRef.current) {
                 clearTimeout(dwellTimerRef.current);
             }
+            if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+            }
             return;
         }
 
-        // Load WebGazer library
+        if (webgazerInitialized && (window as any).webgazer) {
+            console.log('▶️ Resuming existing WebGazer instance');
+            (window as any).webgazer.resume();
+            setIsInitialized(true);
+            return;
+        }
+
+        if (webgazerInitialized) {
+            return;
+        }
+
+        console.log('🆕 Initializing WebGazer for the first time');
+
         const script = document.createElement('script');
         script.src = 'https://webgazer.cs.brown.edu/webgazer.js';
         script.async = true;
@@ -32,96 +56,177 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
 
             console.log('🔄 Starting WebGazer...');
 
-            webgazer
-                .setGazeListener((data: any) => {
-                    if (data == null) return;
+            const gazeListener = (data: any) => {
+                if (data == null) return;
 
-                    const { x, y } = data;
-                    // Log every 10th gaze point to avoid console spam
-                    if (Math.random() < 0.1) {
-                        console.log(`👁️ Gaze: (${Math.round(x)}, ${Math.round(y)})`);
-                    }
-                    setGazePosition({ x, y });
+                const { x, y } = data;
+                setGazePosition({ x, y });
 
-                    // Check what element is being looked at
-                    const elements = document.elementsFromPoint(x, y);
-                    const buttonElement = elements.find(el =>
-                        el.hasAttribute('data-symbol-id') ||
-                        el.hasAttribute('data-action-button')
-                    );
+                const elements = document.elementsFromPoint(x, y);
 
-                    if (buttonElement) {
-                        const elementId = buttonElement.getAttribute('data-symbol-id') ||
-                            buttonElement.getAttribute('data-action-button');
+                // --- TOLERANCE CHECK ---
+                // If nothing found at exact point, check surrounding area (50px radius)
+                if (!elements.some(el => el.hasAttribute('data-symbol-id'))) {
+                    const tolerance = 50; // pixels
+                    const pointsToCheck = [
+                        { x: x, y: y - tolerance }, // Top
+                        { x: x, y: y + tolerance }, // Bottom
+                        { x: x - tolerance, y: y }, // Left
+                        { x: x + tolerance, y: y }  // Right
+                    ];
 
-                        if (elementId !== hoveredElement) {
-                            // New element - start dwell timer
-                            setHoveredElement(elementId);
-                            dwellStartTimeRef.current = Date.now();
-
-                            if (dwellTimerRef.current) {
-                                clearTimeout(dwellTimerRef.current);
-                            }
-
-                            dwellTimerRef.current = setTimeout(() => {
-                                // Trigger click after dwell time
-                                console.log(`✅ Dwell complete on: ${elementId}`);
-                                (buttonElement as HTMLElement).click();
-                                setHoveredElement(null);
-                            }, dwellTime);
+                    for (const point of pointsToCheck) {
+                        const nearbyElements = document.elementsFromPoint(point.x, point.y);
+                        const nearbyButton = nearbyElements.find(el => el.hasAttribute('data-symbol-id'));
+                        if (nearbyButton) {
+                            elements.push(nearbyButton);
+                            break; // Found one, stop looking
                         }
-                    } else {
-                        // Not looking at any button
+                    }
+                }
+
+                let buttonElement: Element | null = null;
+
+                // Find button with data-symbol-id
+                for (const el of elements) {
+                    if (el.hasAttribute && el.hasAttribute('data-symbol-id')) {
+                        buttonElement = el;
+                        break;
+                    }
+                }
+
+                // Try closest if not found
+                if (!buttonElement) {
+                    for (const el of elements) {
+                        if (el instanceof HTMLElement) {
+                            const closest = el.closest('[data-symbol-id]');
+                            if (closest) {
+                                buttonElement = closest;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (buttonElement) {
+                    const elementId = buttonElement.getAttribute('data-symbol-id');
+
+                    if (elementId && elementId !== currentHoveredRef.current) {
+                        // NEW element - start dwell timer
+                        console.log('🎯 NEW DWELL START:', elementId);
+                        currentHoveredRef.current = elementId;
+                        setHoveredElement(elementId);
+                        dwellStartTimeRef.current = Date.now();
+                        setDwellProgress(0);
+
+                        // Clear existing timers
                         if (dwellTimerRef.current) {
                             clearTimeout(dwellTimerRef.current);
+                            dwellTimerRef.current = null;
                         }
-                        setHoveredElement(null);
+                        if (progressIntervalRef.current) {
+                            clearInterval(progressIntervalRef.current);
+                            progressIntervalRef.current = null;
+                        }
+
+                        // Update progress every 50ms
+                        progressIntervalRef.current = setInterval(() => {
+                            const elapsed = Date.now() - dwellStartTimeRef.current;
+                            const progress = Math.min((elapsed / dwellTime) * 100, 100);
+                            setDwellProgress(progress);
+                        }, 50);
+
+                        // Trigger click after dwell time
+                        dwellTimerRef.current = setTimeout(() => {
+                            console.log('🚀 DWELL COMPLETE! CLICKING:', elementId);
+                            console.log('Button element:', buttonElement);
+
+                            try {
+                                (buttonElement as HTMLElement).click();
+                                console.log('✅ CLICK SUCCESSFUL!');
+                            } catch (err) {
+                                console.error('❌ Click error:', err);
+                                // Try manual event
+                                const evt = new MouseEvent('click', { bubbles: true, cancelable: true });
+                                buttonElement.dispatchEvent(evt);
+                            }
+
+                            currentHoveredRef.current = null;
+                            setHoveredElement(null);
+                            setDwellProgress(0);
+
+                            if (progressIntervalRef.current) {
+                                clearInterval(progressIntervalRef.current);
+                                progressIntervalRef.current = null;
+                            }
+                        }, dwellTime);
                     }
-                })
+                } else {
+                    // Not looking at any button
+                    if (currentHoveredRef.current !== null) {
+                        console.log('👋 Stopped looking at button');
+                        currentHoveredRef.current = null;
+                        setHoveredElement(null);
+                        setDwellProgress(0);
+
+                        if (dwellTimerRef.current) {
+                            clearTimeout(dwellTimerRef.current);
+                            dwellTimerRef.current = null;
+                        }
+                        if (progressIntervalRef.current) {
+                            clearInterval(progressIntervalRef.current);
+                            progressIntervalRef.current = null;
+                        }
+                    }
+                }
+            };
+
+            webgazer
+                .setGazeListener(gazeListener)
                 .showVideoPreview(true)
-                .showPredictionPoints(true)
+                .showPredictionPoints(false)
                 .begin()
                 .then(() => {
                     console.log('✅ WebGazer started successfully!');
+                    webgazerInitialized = true;
 
-                    // Wait for video element to be created
                     setTimeout(() => {
                         const videoContainer = document.getElementById('webgazerVideoContainer');
                         const videoFeed = document.getElementById('webgazerVideoFeed');
                         const faceOverlay = document.getElementById('webgazerFaceOverlay');
                         const faceFeedbackBox = document.getElementById('webgazerFaceFeedbackBox');
 
-                        console.log('🔍 Looking for video elements...');
-                        console.log('Video container:', videoContainer);
-                        console.log('Video feed:', videoFeed);
-
                         if (videoContainer) {
                             videoContainer.style.position = 'fixed';
-                            videoContainer.style.bottom = '10px';
-                            videoContainer.style.left = '10px';
-                            videoContainer.style.zIndex = '99999';
+                            videoContainer.style.bottom = '20px';
+                            videoContainer.style.right = '20px';
+                            videoContainer.style.left = 'auto';
+                            videoContainer.style.top = 'auto';
+                            videoContainer.style.width = '200px';
+                            videoContainer.style.height = '150px';
+                            videoContainer.style.zIndex = '9998';
                             videoContainer.style.display = 'block';
-                            console.log('✅ Video container styled');
                         }
 
                         if (videoFeed) {
                             videoFeed.style.display = 'block';
-                            videoFeed.style.border = '4px solid #22c55e';
+                            videoFeed.style.width = '200px';
+                            videoFeed.style.height = '150px';
+                            videoFeed.style.border = '3px solid #22c55e';
                             videoFeed.style.borderRadius = '8px';
-                            console.log('✅ Video feed styled');
                         }
 
                         if (faceOverlay) {
-                            faceOverlay.style.display = 'block';
+                            faceOverlay.style.display = 'none';
                         }
 
                         if (faceFeedbackBox) {
-                            faceFeedbackBox.style.display = 'block';
+                            faceFeedbackBox.style.display = 'none';
                         }
 
                         setIsInitialized(true);
                         console.log('✅ Eye tracking fully initialized!');
-                    }, 2000);
+                    }, 1000);
                 })
                 .catch((err: any) => {
                     console.error('❌ WebGazer failed to start:', err);
@@ -135,14 +240,17 @@ export const useEyeTracking = (enabled: boolean, dwellTime: number = 2000) => {
         document.head.appendChild(script);
 
         return () => {
-            if ((window as any).webgazer) {
-                (window as any).webgazer.end();
+            if ((window as any).webgazer && enabled) {
+                (window as any).webgazer.pause();
             }
-            if (script.parentNode) {
-                script.parentNode.removeChild(script);
+            if (progressIntervalRef.current) {
+                clearInterval(progressIntervalRef.current);
+            }
+            if (dwellTimerRef.current) {
+                clearTimeout(dwellTimerRef.current);
             }
         };
-    }, [enabled, hoveredElement, dwellTime]);
+    }, [enabled, dwellTime]);
 
-    return { gazePosition, hoveredElement, isInitialized };
+    return { gazePosition, hoveredElement, dwellProgress, isInitialized };
 };

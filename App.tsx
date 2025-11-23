@@ -5,6 +5,7 @@ import { AACSymbol, NodeType } from './types';
 import { naturalizeSentence, generateSpeech, playAudioBuffer, predictNextSymbols } from './services/geminiService';
 import { useEyeTracking } from './hooks/useEyeTracking';
 import { GazeCursor } from './components/GazeCursor';
+import { CalibrationScreen } from './components/CalibrationScreen';
 
 // --- WAV ENCODER HELPERS ---
 
@@ -71,7 +72,8 @@ const IconCard: React.FC<{
   onClick: (symbol: AACSymbol) => void;
   isSuggested?: boolean;
   isGazedAt?: boolean;
-}> = ({ symbol, onClick, isSuggested, isGazedAt }) => {
+  dwellProgress?: number; // 0-100 percentage
+}> = ({ symbol, onClick, isSuggested, isGazedAt, dwellProgress = 0 }) => {
   return (
     <button
       data-symbol-id={symbol.id}
@@ -92,6 +94,19 @@ const IconCard: React.FC<{
       {isSuggested && (
         <div className="absolute -top-2 -right-2 bg-indigo-500 text-white text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center animate-bounce">
           <Sparkles size={10} className="mr-1" /> Pick
+        </div>
+      )}
+      {isGazedAt && dwellProgress > 0 && (
+        <div className="absolute inset-0 rounded-3xl overflow-hidden">
+          <div
+            className="absolute bottom-0 left-0 right-0 bg-green-500 opacity-30 transition-all duration-100"
+            style={{ height: `${dwellProgress}%` }}
+          />
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="text-white font-bold text-2xl drop-shadow-lg">
+              {Math.ceil((100 - dwellProgress) / 50)}
+            </div>
+          </div>
         </div>
       )}
       <span className="text-5xl md:text-6xl lg:text-7xl mb-3 drop-shadow-sm filter">
@@ -190,7 +205,9 @@ export default function App() {
 
   // Eye Tracking State
   const [eyeTrackingEnabled, setEyeTrackingEnabled] = useState(false);
-  const { gazePosition, hoveredElement, isInitialized } = useEyeTracking(eyeTrackingEnabled, 2000);
+  const [showCalibration, setShowCalibration] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(false);
+  const { gazePosition, hoveredElement, dwellProgress, isInitialized } = useEyeTracking(eyeTrackingEnabled, 500);
 
   // --- RECORDING LOGIC (WAV) ---
 
@@ -439,30 +456,48 @@ export default function App() {
 
   if (view === 'landing') {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden bg-[#f0f4f8]">
-        <div className="absolute top-0 left-0 w-96 h-96 bg-purple-300 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
-        <div className="absolute top-0 right-0 w-96 h-96 bg-yellow-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
-        <div className="absolute -bottom-8 left-20 w-96 h-96 bg-pink-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-4000"></div>
+      <>
+        {/* Calibration Screen Overlay */}
+        {showCalibration && (
+          <CalibrationScreen
+            onComplete={() => {
+              setShowCalibration(false);
+              setIsCalibrated(true);
+              console.log('✅ Calibration complete!');
+            }}
+            onSkip={() => {
+              setShowCalibration(false);
+              setIsCalibrated(true);
+              console.log('⏭️ Calibration skipped');
+            }}
+          />
+        )}
 
-        <div className="z-10 flex flex-col items-center text-center space-y-12 max-w-md w-full">
-          <div>
-            <h1 className="text-6xl font-black text-slate-800 mb-2 tracking-tight">Amplify</h1>
-            <p className="text-xl text-slate-500 font-semibold">Voice for everyone.</p>
-          </div>
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 relative overflow-hidden bg-[#f0f4f8]">
+          <div className="absolute top-0 left-0 w-96 h-96 bg-purple-300 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob"></div>
+          <div className="absolute top-0 right-0 w-96 h-96 bg-yellow-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-2000"></div>
+          <div className="absolute -bottom-8 left-20 w-96 h-96 bg-pink-200 rounded-full mix-blend-multiply filter blur-3xl opacity-50 animate-blob animation-delay-4000"></div>
 
-          <button
-            onClick={startBackgroundRecording}
-            className="group relative flex items-center justify-center w-64 h-64 rounded-full bg-white shadow-[0_20px_50px_rgba(99,102,241,0.3)] transition-transform hover:scale-105 active:scale-95"
-          >
-            <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 opacity-10 group-hover:opacity-20 transition-opacity"></div>
-            <div className="absolute inset-0 rounded-full border-4 border-indigo-100 animate-ping opacity-20"></div>
-            <Mic size={100} className="text-indigo-600 drop-shadow-sm group-hover:text-indigo-700 transition-colors" />
-            <div className="absolute bottom-10 text-indigo-400 font-bold text-sm uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0">
-              Tap to Start
+          <div className="z-10 flex flex-col items-center text-center space-y-12 max-w-md w-full">
+            <div>
+              <h1 className="text-6xl font-black text-slate-800 mb-2 tracking-tight">Amplify</h1>
+              <p className="text-xl text-slate-500 font-semibold">Voice for everyone.</p>
             </div>
-          </button>
+
+            <button
+              onClick={startBackgroundRecording}
+              className="group relative flex items-center justify-center w-64 h-64 rounded-full bg-white shadow-[0_20px_50px_rgba(99,102,241,0.3)] transition-transform hover:scale-105 active:scale-95"
+            >
+              <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 opacity-10 group-hover:opacity-20 transition-opacity"></div>
+              <div className="absolute inset-0 rounded-full border-4 border-indigo-100 animate-ping opacity-20"></div>
+              <Mic size={100} className="text-indigo-600 drop-shadow-sm group-hover:text-indigo-700 transition-colors" />
+              <div className="absolute bottom-10 text-indigo-400 font-bold text-sm uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity transform translate-y-2 group-hover:translate-y-0">
+                Tap to Start
+              </div>
+            </button>
+          </div>
         </div>
-      </div>
+      </>
     );
   }
 
@@ -513,7 +548,18 @@ export default function App() {
               <h1 className="font-black text-xl text-slate-700 tracking-tight hidden sm:block">Amplify</h1>
             </div>
             <button
-              onClick={() => setEyeTrackingEnabled(!eyeTrackingEnabled)}
+              onClick={() => {
+                if (!eyeTrackingEnabled) {
+                  // Turning ON - show calibration if not calibrated
+                  setEyeTrackingEnabled(true);
+                  if (!isCalibrated) {
+                    setShowCalibration(true);
+                  }
+                } else {
+                  // Turning OFF
+                  setEyeTrackingEnabled(false);
+                }
+              }}
               className={`flex items-center gap-2 px-3 py-2 rounded-xl transition-all font-bold ${eyeTrackingEnabled
                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -634,6 +680,7 @@ export default function App() {
                   onClick={handleSymbolClick}
                   isSuggested={true}
                   isGazedAt={hoveredElement === item.id}
+                  dwellProgress={hoveredElement === item.id ? dwellProgress : 0}
                 />
               ))}
             </div>
@@ -649,6 +696,7 @@ export default function App() {
               symbol={item}
               onClick={handleSymbolClick}
               isGazedAt={hoveredElement === item.id}
+              dwellProgress={hoveredElement === item.id ? dwellProgress : 0}
             />
           ))}
         </div>
