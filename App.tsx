@@ -8,6 +8,7 @@ import { GazeCursor } from './components/GazeCursor';
 import { CalibrationScreen } from './components/CalibrationScreen';
 import { ThemeProvider } from './components/ThemeContext';
 import { ThemeToggle } from './components/ThemeToggle';
+import { LocationTracker } from './components/LocationTracker';
 
 // --- WAV ENCODER HELPERS ---
 
@@ -607,6 +608,7 @@ function AppContent() {
               <h1 className="font-black text-xl text-slate-700 tracking-tight hidden sm:block dark:text-slate-200">Amplify</h1>
             </div>
             <div className="flex items-center gap-2">
+              <LocationTracker />
               <ThemeToggle />
               <button
                 onClick={() => {
